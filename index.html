@@ -30,6 +30,7 @@
         <a href="#scanner" class="nav-link" data-tab="scanner">Resume Scanner</a>
         <a href="#pool" class="nav-link" data-tab="pool">Candidate Pool</a>
         <a href="#about" class="nav-link" data-tab="about">About</a>
+        <span class="status-dot"><i></i>AI Engine Online</span>
       </nav>
       <button class="nav-toggle" id="navToggle" aria-label="Toggle menu">☰</button>
     </div>
@@ -39,6 +40,7 @@
   <section class="tab-panel active" id="home">
     <div class="hero">
       <div class="hero-grid-bg"></div>
+      <canvas class="hero-net" id="netCanvas" aria-hidden="true"></canvas>
       <div class="hero-glow"></div>
       <div class="container hero-content">
         <span class="eyebrow">Aarti Steels Ltd · Forging Talent Since 1979</span>
@@ -49,13 +51,14 @@
           strongest applicants for interview — from the Rolling Mill and Power Plant to Cyber
           Security, SAP, IT and Finance.
         </p>
+        <p class="hero-rotate">Now scoring resumes for <span class="rotate-word" id="rotateWord">Rolling Mill</span></p>
         <div class="hero-actions">
           <button class="btn btn-primary" data-goto="scanner">Scan a Resume</button>
           <button class="btn btn-ghost" data-goto="pool">View Candidate Pool</button>
         </div>
         <div class="hero-stats" id="heroStats">
           <div class="stat"><strong data-stat="total">0</strong><span>Resumes Scanned</span></div>
-          <div class="stat"><strong data-stat="shortlisted">0</strong><span>Shortlisted</span></div>
+          <div class="stat"><strong data-stat="shortlisted">0</strong><span>In Pipeline</span></div>
           <div class="stat"><strong data-stat="avg">0</strong><span>Avg. Score</span></div>
           <div class="stat"><strong data-stat="depts">0</strong><span>Departments</span></div>
         </div>
@@ -65,17 +68,17 @@
     <div class="container section">
       <h2 class="section-title">How TalentForge Works</h2>
       <div class="cards-grid">
-        <div class="card">
+        <div class="card reveal">
           <div class="card-icon">📄</div>
           <h3>1. Upload Resume</h3>
           <p>Upload a PDF or text resume. Parsing runs securely inside your browser — the file never leaves your machine.</p>
         </div>
-        <div class="card">
+        <div class="card reveal">
           <div class="card-icon">🧠</div>
           <h3>2. AI Department Match</h3>
           <p>The engine reads the resume against the chosen function's skill, tooling and certification profile and scores eight weighted dimensions.</p>
         </div>
-        <div class="card">
+        <div class="card reveal">
           <div class="card-icon">🏆</div>
           <h3>3. Rank &amp; Shortlist</h3>
           <p>Candidates rank automatically. Filter by department or score, flag the best fits for interview, and export your shortlist to CSV.</p>
@@ -107,14 +110,43 @@
             <input type="text" id="candName" placeholder="e.g. Ravi Kumar" />
           </label>
           <label class="field">
+            <span>Position / Role Applied</span>
+            <input type="text" id="candPosition" placeholder="e.g. Rolling Mill Engineer" />
+          </label>
+          <label class="field">
             <span>Applying For (Department)</span>
             <select id="deptSelect"></select>
           </label>
           <p class="dept-hint" id="deptHint"></p>
-          <label class="field">
-            <span>Minimum Experience Required (years)</span>
-            <input type="number" id="minExp" value="2" min="0" max="40" />
-          </label>
+          <div class="field-row">
+            <label class="field">
+              <span>Candidate Email</span>
+              <input type="email" id="candEmail" placeholder="name@email.com" />
+            </label>
+            <label class="field">
+              <span>Candidate Phone</span>
+              <input type="tel" id="candPhone" placeholder="+91 ..." />
+            </label>
+          </div>
+          <p class="contact-prefill" id="contactPrefill"></p>
+          <div class="field-row">
+            <label class="field">
+              <span>Application Source</span>
+              <select id="candSource">
+                <option value="Referral">Referral</option>
+                <option value="LinkedIn">LinkedIn</option>
+                <option value="Naukri">Naukri</option>
+                <option value="Company Website">Company Website</option>
+                <option value="Walk-in">Walk-in</option>
+                <option value="Campus">Campus</option>
+                <option value="Other">Other</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Min. Experience (years)</span>
+              <input type="number" id="minExp" value="2" min="0" max="40" />
+            </label>
+          </div>
 
           <h3 class="panel-title">2 · Resume File</h3>
           <div class="dropzone" id="dropzone">
@@ -138,6 +170,10 @@
         <!-- Result column -->
         <div class="panel result-panel" id="resultPanel">
           <h3 class="panel-title">AI Analysis Result</h3>
+          <div class="scan-overlay" id="scanOverlay" hidden>
+            <div class="scan-doc"></div>
+            <p>Analyzing resume…</p>
+          </div>
           <div class="result-empty" id="resultEmpty">
             <div class="dz-icon">📊</div>
             <p>Upload a resume and click <strong>Analyze</strong> to see the score breakdown here.</p>
@@ -177,6 +213,11 @@
               <div class="hl-text" id="hlText"></div>
             </details>
 
+            <label class="field" style="margin-top:18px;">
+              <span>Recruiter Notes (optional)</span>
+              <textarea id="candNotes" rows="2" placeholder="Interview remarks, availability, salary expectation..."></textarea>
+            </label>
+
             <div class="result-actions">
               <button class="btn btn-primary" id="saveBtn">Save to Candidate Pool</button>
               <button class="btn btn-ghost" id="rescanBtn">Scan Another</button>
@@ -191,7 +232,9 @@
   <section class="tab-panel" id="pool">
     <div class="container section">
       <h2 class="section-title">Candidate Pool</h2>
-      <p class="section-lead">Ranked applicants. Filter, shortlist for interview, and export.</p>
+      <p class="section-lead">Ranked applicants with a live hiring pipeline. Filter, track stages, and export.</p>
+
+      <div class="hr-dash" id="hrDash"></div>
 
       <div class="pool-toolbar">
         <div class="filters">
@@ -203,8 +246,12 @@
             <option value="50">50+ (Average)</option>
           </select>
           <select id="filterStatus">
-            <option value="">All Candidates</option>
-            <option value="shortlisted">Shortlisted Only</option>
+            <option value="">All Stages</option>
+            <option value="New">New</option>
+            <option value="Shortlisted">Shortlisted</option>
+            <option value="Interview">Interview</option>
+            <option value="Selected">Selected</option>
+            <option value="Rejected">Rejected</option>
           </select>
           <input type="text" id="searchBox" placeholder="Search name / skill..." />
         </div>
@@ -223,8 +270,8 @@
               <th>Department</th>
               <th>Score</th>
               <th>Top Skills</th>
-              <th>Date</th>
-              <th>Action</th>
+              <th>Stage</th>
+              <th></th>
             </tr>
           </thead>
           <tbody id="poolBody"></tbody>
@@ -239,32 +286,110 @@
   <!-- ===================== ABOUT ===================== -->
   <section class="tab-panel" id="about">
     <div class="container section about-section">
-      <h2 class="section-title">About Aarti TalentForge</h2>
-      <p>
-        <strong>Aarti TalentForge</strong> is the in-house AI resume intelligence platform of
-        Aarti Steels Ltd. Part of the Aarti Group established in 1979, Aarti Steels is a fully
-        integrated carbon and alloy steel manufacturer with state-of-the-art plants in Ludhiana
-        (Punjab) and Cuttack (Odisha), producing alloy steel rounds &amp; squares, spring steel,
-        tyre bead wire and specialised wires for the automotive and engineering industries.
-      </p>
-      <p>
-        A steel plant runs on dozens of very different skill sets — a Rolling Mill engineer, a
-        Power Plant operator, a SAP consultant and a Cyber Security analyst have almost nothing in
-        common on paper. TalentForge gives each function its own AI scoring profile so every
-        resume is judged against the work that actually happens in that department.
+      <h2 class="section-title">About Aarti Steels Ltd</h2>
+
+      <p class="about-lead reveal">
+        Aarti Steels Ltd is the flagship steel business of the <strong>Aarti Group</strong>, a
+        diversified industrial house established in <strong>1979</strong> with interests spanning
+        steel, textiles and healthcare. Over four decades, the company has grown into a
+        <strong>fully integrated carbon and alloy steel manufacturer</strong>, supplying critical
+        long products to the automotive, engineering and components industries across India and
+        beyond.
       </p>
 
-      <div class="about-grid">
-        <div class="about-stat"><strong>1979</strong><span>Group Established</span></div>
-        <div class="about-stat"><strong>2</strong><span>Integrated Plants</span></div>
-        <div class="about-stat"><strong>3 Lakh T</strong><span>Annual Capacity</span></div>
-        <div class="about-stat"><strong>90 MW</strong><span>Captive Power</span></div>
+      <div class="about-block reveal">
+        <h3 class="about-sub">Heritage &amp; Growth</h3>
+        <p>
+          What began as a single steel unit has matured into an end-to-end operation that controls
+          the full value chain — from steel melting and refining to continuous casting and
+          precision rolling. This integration lets Aarti Steels hold tight control over chemistry,
+          cleanliness and consistency, the three qualities that matter most to demanding alloy-steel
+          customers.
+        </p>
       </div>
 
-      <div class="disclaimer">
-        <strong>Note:</strong> Scoring is heuristic and built to assist — not replace — human
-        judgement. All processing happens locally in your browser; resume data is stored only on
-        this device.
+      <div class="about-block reveal">
+        <h3 class="about-sub">Manufacturing Facilities</h3>
+        <div class="facility-grid">
+          <div class="facility-card">
+            <div class="facility-icon">🏭</div>
+            <h4>Ludhiana, Punjab</h4>
+            <p>The group's northern hub for alloy and carbon steel production, serving the dense
+               automotive and components belt of North India.</p>
+          </div>
+          <div class="facility-card">
+            <div class="facility-icon">🏭</div>
+            <h4>Cuttack, Odisha</h4>
+            <p>The eastern integrated plant with melting, casting and rolling lines plus captive
+               power, positioned close to raw-material and power resources.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="about-block reveal">
+        <h3 class="about-sub">What We Make</h3>
+        <p>A broad portfolio of carbon, alloy and micro-alloyed steel long products:</p>
+        <div class="product-grid">
+          <span class="product-tag">Alloy Steel Rounds</span>
+          <span class="product-tag">Alloy Steel Squares</span>
+          <span class="product-tag">Spring Steel</span>
+          <span class="product-tag">Tyre Bead Wire</span>
+          <span class="product-tag">Music / HTGS Wire</span>
+          <span class="product-tag">Automotive Steel</span>
+          <span class="product-tag">Hand Tool Flats</span>
+          <span class="product-tag">Micro-Alloyed Steel</span>
+          <span class="product-tag">Bright Bars</span>
+        </div>
+      </div>
+
+      <div class="about-block reveal">
+        <h3 class="about-sub">Industries We Serve</h3>
+        <div class="industry-list">
+          <div class="industry-item"><span>🚗</span> Automotive &amp; auto components</div>
+          <div class="industry-item"><span>🏍️</span> Two-wheeler &amp; cycle tyre bead wire</div>
+          <div class="industry-item"><span>⚙️</span> Engineering &amp; general fabrication</div>
+          <div class="industry-item"><span>🔧</span> Fasteners &amp; hand tools</div>
+          <div class="industry-item"><span>🛠️</span> Forging &amp; machining units</div>
+          <div class="industry-item"><span>🌐</span> Export markets</div>
+        </div>
+      </div>
+
+      <div class="about-block reveal">
+        <h3 class="about-sub">By the Numbers</h3>
+        <div class="about-grid">
+          <div class="about-stat reveal"><strong>1979</strong><span>Group Established</span></div>
+          <div class="about-stat reveal"><strong>2</strong><span>Integrated Plants</span></div>
+          <div class="about-stat reveal"><strong>~3 Lakh T</strong><span>Annual Capacity</span></div>
+          <div class="about-stat reveal"><strong>90 MW</strong><span>Captive Power</span></div>
+        </div>
+      </div>
+
+      <div class="about-block reveal">
+        <h3 class="about-sub">Quality &amp; Integration</h3>
+        <p>
+          Because melting, casting and rolling sit under one roof, every heat can be traced and
+          controlled — supported by spectrometers, mechanical-testing labs and quality systems.
+          The result is alloy steel that meets the close tolerances and metallurgical properties
+          that automotive and engineering customers depend on.
+        </p>
+      </div>
+
+      <div class="about-block reveal">
+        <h3 class="about-sub">Why Aarti TalentForge</h3>
+        <p>
+          A plant this integrated runs on a remarkably wide range of skills — a Rolling Mill
+          engineer, a Power Plant operator, a SAP consultant, a Cyber Security analyst and a
+          Finance professional share almost nothing on paper. <strong>Aarti TalentForge</strong>
+          gives each function its own AI scoring profile, so every applicant is judged against the
+          work that actually happens in that department, helping the HR team move the right people
+          to interview faster and more objectively.
+        </p>
+      </div>
+
+      <div class="disclaimer reveal">
+        <strong>Note:</strong> Company information here is indicative and compiled for this internal
+        HR tool. Resume scoring is heuristic and built to assist — not replace — human judgement.
+        All processing happens locally in your browser; candidate data is stored only on this device.
       </div>
     </div>
   </section>
