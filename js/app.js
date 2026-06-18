@@ -208,6 +208,8 @@ const CONTACT = {
 
 /* ---------- State ---------- */
 const LS_KEY = 'aarti_talentforge_v2';
+const STAGES = ['New', 'Shortlisted', 'Interview', 'Selected', 'Rejected'];
+const ACTIVE_STAGES = ['Shortlisted', 'Interview', 'Selected']; // counts as "in pipeline"
 let candidates = loadCandidates();
 let currentAnalysis = null;
 let resumeText = '';
@@ -215,7 +217,13 @@ let resumeText = '';
 const $ = (s, c = document) => c.querySelector(s);
 const $$ = (s, c = document) => [...c.querySelectorAll(s)];
 
-function loadCandidates() { try { return JSON.parse(localStorage.getItem(LS_KEY)) || []; } catch { return []; } }
+function loadCandidates() {
+  let list;
+  try { list = JSON.parse(localStorage.getItem(LS_KEY)) || []; } catch { list = []; }
+  // migrate older records to the pipeline-stage model
+  list.forEach(c => { if (!c.stage) c.stage = c.shortlisted ? 'Shortlisted' : 'New'; });
+  return list;
+}
 function saveCandidates() { localStorage.setItem(LS_KEY, JSON.stringify(candidates)); }
 
 function toast(msg) {
@@ -239,6 +247,9 @@ function activateTab(id) {
   $$('.nav-link').forEach(l => l.classList.toggle('active', l.dataset.tab === id));
   $('#mainNav').classList.remove('open');
   window.scrollTo({ top: 0, behavior: 'smooth' });
+  // ensure reveal items in the now-visible panel show even if observer missed them
+  const panel = document.getElementById(id);
+  if (panel) setTimeout(() => $$('.reveal', panel).forEach(e => e.classList.add('in')), 60);
   if (id === 'pool') renderPool();
 }
 document.addEventListener('click', e => {
@@ -256,7 +267,7 @@ function initDepartments() {
     sel.insertAdjacentHTML('beforeend', `<option value="${key}">${d.emoji} ${d.name}</option>`);
     filterSel.insertAdjacentHTML('beforeend', `<option value="${key}">${d.name}</option>`);
     grid.insertAdjacentHTML('beforeend', `
-      <div class="dept-tile">
+      <div class="dept-tile reveal">
         <div class="dept-emoji">${d.emoji}</div>
         <h4>${d.name}</h4>
         <p>${d.blurb}</p>
@@ -423,6 +434,7 @@ async function handleFile(file) {
       const guess = file.name.replace(/\.(pdf|txt)$/i, '').replace(/[_-]+/g, ' ').replace(/resume|cv|final|updated/gi, '').trim();
       if (guess) $('#candName').value = guess.replace(/\b\w/g, c => c.toUpperCase());
     }
+    prefillContacts(text);
   } catch (err) {
     status.classList.add('err'); status.textContent = '✗ ' + err.message;
     resumeText = ''; $('#analyzeBtn').disabled = true;
@@ -441,6 +453,16 @@ $('#pasteArea').addEventListener('input', e => {
   $('#analyzeBtn').disabled = v.length <= 30;
 });
 
+/* auto-detect email/phone from the resume to save HR typing */
+function prefillContacts(text) {
+  const found = [];
+  const em = text.match(CONTACT.email);
+  const ph = text.match(CONTACT.phone);
+  if (em && !$('#candEmail').value) { $('#candEmail').value = em[0]; found.push('email'); }
+  if (ph && !$('#candPhone').value) { $('#candPhone').value = ph[0].trim(); found.push('phone'); }
+  $('#contactPrefill').textContent = found.length ? `Auto-detected ${found.join(' & ')} from the resume — please verify.` : '';
+}
+
 /* ===================================================
    ANALYZE + RENDER
    =================================================== */
@@ -448,10 +470,29 @@ $('#analyzeBtn').addEventListener('click', () => {
   if (!resumeText || resumeText.trim().length < 30) { toast('Please upload or paste a resume first.'); return; }
   const deptKey = $('#deptSelect').value;
   const minExp = parseInt($('#minExp').value, 10) || 0;
-  currentAnalysis = analyzeResume(resumeText, deptKey, minExp);
-  currentAnalysis.dept = deptKey;
-  currentAnalysis.name = $('#candName').value.trim() || 'Unnamed Candidate';
-  renderResult(currentAnalysis);
+  const btn = $('#analyzeBtn');
+  const overlay = $('#scanOverlay');
+
+  // brief live "scanning" pass for a processing feel
+  btn.disabled = true; btn.textContent = 'Analyzing…';
+  $('#resultEmpty').hidden = true;
+  overlay.hidden = false;
+
+  setTimeout(() => {
+    try {
+      currentAnalysis = analyzeResume(resumeText, deptKey, minExp);
+      currentAnalysis.dept = deptKey;
+      currentAnalysis.name = $('#candName').value.trim() || 'Unnamed Candidate';
+      renderResult(currentAnalysis);
+    } catch (err) {
+      console.error('Analysis failed:', err);
+      toast('Something went wrong while analyzing. Please try again.');
+      $('#resultEmpty').hidden = false;
+    } finally {
+      overlay.hidden = true;
+      btn.disabled = false; btn.textContent = 'Analyze Resume';
+    }
+  }, 950);
 });
 
 function renderResult(a) {
@@ -508,7 +549,9 @@ function highlightText(text, terms) {
 
 $('#rescanBtn').addEventListener('click', () => {
   resumeText = ''; currentAnalysis = null;
-  $('#pasteArea').value = ''; $('#candName').value = '';
+  ['pasteArea','candName','candPosition','candEmail','candPhone','candNotes'].forEach(id => $('#' + id).value = '');
+  $('#candSource').selectedIndex = 0;
+  $('#contactPrefill').textContent = '';
   $('#fileStatus').textContent = ''; fileInput.value = '';
   $('#resultBody').hidden = true; $('#resultEmpty').hidden = false;
   $('#analyzeBtn').disabled = true;
@@ -520,7 +563,13 @@ $('#saveBtn').addEventListener('click', () => {
   candidates.push({
     id: Date.now(), name: a.name, dept: a.dept, score: a.total, verdict: a.verdict,
     skills: a.matched.slice(0, 4), years: a.years, edu: a.eduLevel,
-    date: new Date().toISOString(), shortlisted: a.total >= 65
+    position: $('#candPosition').value.trim(),
+    email: $('#candEmail').value.trim(),
+    phone: $('#candPhone').value.trim(),
+    source: $('#candSource').value,
+    notes: $('#candNotes').value.trim(),
+    date: new Date().toISOString(),
+    stage: a.total >= 65 ? 'Shortlisted' : 'New'
   });
   saveCandidates();
   toast(`Saved "${a.name}" to the candidate pool.`);
@@ -533,46 +582,89 @@ $('#saveBtn').addEventListener('click', () => {
 function renderPool() {
   const dept = $('#filterDept').value;
   const minScore = parseInt($('#filterScore').value, 10);
-  const status = $('#filterStatus').value;
+  const stage = $('#filterStatus').value;
   const q = $('#searchBox').value.trim().toLowerCase();
 
   const list = candidates
     .filter(c => !dept || c.dept === dept)
     .filter(c => c.score >= minScore)
-    .filter(c => status !== 'shortlisted' || c.shortlisted)
+    .filter(c => !stage || c.stage === stage)
     .filter(c => !q || c.name.toLowerCase().includes(q) || (c.skills || []).join(' ').toLowerCase().includes(q))
     .sort((a, b) => b.score - a.score);
+
+  renderDashboard();
 
   const body = $('#poolBody');
   $('#poolEmpty').style.display = list.length ? 'none' : 'block';
   body.innerHTML = list.map((c, i) => {
     const d = DEPARTMENTS[c.dept];
     const chips = (c.skills || []).map(s => `<span class="mini-chip">${s}</span>`).join('') || '—';
+    const opts = STAGES.map(s => `<option value="${s}" ${c.stage === s ? 'selected' : ''}>${s}</option>`).join('');
     return `
       <tr>
         <td data-label="Rank"><span class="rank-badge ${i === 0 ? 'top' : ''}">${i + 1}</span></td>
         <td data-label="Candidate">
-          <div class="cand-name">${escapeHtml(c.name)} ${c.shortlisted ? '⭐' : ''}</div>
-          <div class="cand-sub">${c.years ? c.years + ' yrs · ' : ''}${c.edu || ''} · ${c.verdict}</div>
+          <div class="cand-name">${escapeHtml(c.name)}</div>
+          <div class="cand-sub">${c.position ? escapeHtml(c.position) + ' · ' : ''}${c.years ? c.years + ' yrs · ' : ''}${c.edu || ''}</div>
+          ${c.email ? `<div class="cand-sub">✉ ${escapeHtml(c.email)}${c.phone ? ' · ☎ ' + escapeHtml(c.phone) : ''}</div>` : ''}
         </td>
         <td data-label="Department"><span class="dept-tag">${d ? d.emoji + ' ' + d.name : c.dept}</span></td>
         <td data-label="Score"><span class="score-tag" style="background:${scoreColor(c.score)}">${c.score}</span></td>
         <td data-label="Skills"><div class="mini-chips">${chips}</div></td>
-        <td data-label="Date">${new Date(c.date).toLocaleDateString()}</td>
-        <td data-label="Action">
-          <button class="icon-btn star-btn ${c.shortlisted ? 'on' : ''}" data-act="star" data-id="${c.id}" title="Shortlist for interview">⭐</button>
+        <td data-label="Stage">
+          <select class="stage-select stage-${c.stage}" data-act="stage" data-id="${c.id}">${opts}</select>
+        </td>
+        <td data-label="">
           <button class="icon-btn" data-act="del" data-id="${c.id}" title="Remove">🗑️</button>
         </td>
       </tr>`;
   }).join('');
 }
 
+/* HR Insights dashboard */
+function renderDashboard() {
+  const dash = $('#hrDash');
+  const total = candidates.length;
+  if (!total) { dash.innerHTML = ''; return; }
+  const inPipeline = candidates.filter(c => ACTIVE_STAGES.includes(c.stage)).length;
+  const selected = candidates.filter(c => c.stage === 'Selected').length;
+  const avg = Math.round(candidates.reduce((s, c) => s + c.score, 0) / total);
+
+  const bands = [
+    { label: 'Excellent', min: 80, color: 'var(--green)' },
+    { label: 'Strong', min: 65, max: 79, color: 'var(--blue)' },
+    { label: 'Average', min: 50, max: 64, color: 'var(--amber)' },
+    { label: 'Below', min: 0, max: 49, color: 'var(--red)' }
+  ];
+  const distRows = bands.map(b => {
+    const n = candidates.filter(c => c.score >= b.min && (b.max === undefined || c.score <= b.max)).length;
+    const pct = Math.round((n / total) * 100);
+    return `<div class="dist-row"><span class="dl">${b.label}</span>
+      <div class="dist-track"><div class="dist-fill" style="background:${b.color};width:0" data-w="${pct}"></div></div>
+      <span class="dn">${n}</span></div>`;
+  }).join('');
+
+  dash.innerHTML = `
+    <div class="kpi"><div class="kpi-val">${total}</div><div class="kpi-label">Total Candidates</div></div>
+    <div class="kpi blue"><div class="kpi-val">${inPipeline}</div><div class="kpi-label">In Pipeline</div></div>
+    <div class="kpi green"><div class="kpi-val">${selected}</div><div class="kpi-label">Selected</div></div>
+    <div class="kpi amber"><div class="kpi-val">${avg}</div><div class="kpi-label">Avg. Score</div></div>
+    <div class="dist-card"><h4>Score Distribution</h4>${distRows}</div>`;
+  setTimeout(() => $$('.dist-fill', dash).forEach(f => f.style.width = f.dataset.w + '%'), 60);
+}
+
+$('#poolBody').addEventListener('change', e => {
+  const sel = e.target.closest('select[data-act="stage"]');
+  if (!sel) return;
+  const c = candidates.find(x => x.id === Number(sel.dataset.id));
+  if (!c) return;
+  c.stage = sel.value;
+  saveCandidates(); renderPool(); updateHeroStats();
+});
+
 $('#poolBody').addEventListener('click', e => {
-  const btn = e.target.closest('[data-act]'); if (!btn) return;
-  const id = Number(btn.dataset.id);
-  const c = candidates.find(x => x.id === id); if (!c) return;
-  if (btn.dataset.act === 'star') c.shortlisted = !c.shortlisted;
-  if (btn.dataset.act === 'del') candidates = candidates.filter(x => x.id !== id);
+  const btn = e.target.closest('button[data-act="del"]'); if (!btn) return;
+  candidates = candidates.filter(x => x.id !== Number(btn.dataset.id));
   saveCandidates(); renderPool(); updateHeroStats();
 });
 ['filterDept','filterScore','filterStatus','searchBox'].forEach(id => $('#' + id).addEventListener('input', renderPool));
@@ -586,11 +678,12 @@ $('#clearBtn').addEventListener('click', () => {
 
 $('#exportBtn').addEventListener('click', () => {
   if (!candidates.length) { toast('Nothing to export.'); return; }
-  const rows = [['Name','Department','Score','Verdict','Experience(yrs)','Education','Shortlisted','TopSkills','Date']];
+  const rows = [['Name','Position','Department','Score','Verdict','Experience(yrs)','Education','Email','Phone','Source','Stage','TopSkills','Notes','Date']];
   candidates.slice().sort((a, b) => b.score - a.score).forEach(c => {
     const d = DEPARTMENTS[c.dept];
-    rows.push([c.name, d ? d.name : c.dept, c.score, c.verdict, c.years, c.edu || '',
-      c.shortlisted ? 'Yes' : 'No', (c.skills || []).join(' | '), new Date(c.date).toLocaleDateString()]);
+    rows.push([c.name, c.position || '', d ? d.name : c.dept, c.score, c.verdict, c.years, c.edu || '',
+      c.email || '', c.phone || '', c.source || '', c.stage || '',
+      (c.skills || []).join(' | '), c.notes || '', new Date(c.date).toLocaleDateString()]);
   });
   const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });
@@ -601,16 +694,100 @@ $('#exportBtn').addEventListener('click', () => {
   toast('Exported shortlist to CSV.');
 });
 
-/* ---------- Hero stats ---------- */
+/* ---------- Hero stats (animated count-up) ---------- */
+function countTo(el, target) {
+  const start = parseInt(el.textContent, 10) || 0;
+  if (start === target) { el.textContent = target; return; }
+  const steps = 28; let i = 0;
+  clearInterval(el._iv);
+  el._iv = setInterval(() => {
+    i++; const v = Math.round(start + (target - start) * (i / steps));
+    el.textContent = v;
+    if (i >= steps) { el.textContent = target; clearInterval(el._iv); }
+  }, 22);
+}
 function updateHeroStats() {
   const total = candidates.length;
-  const shortlisted = candidates.filter(c => c.shortlisted).length;
+  const shortlisted = candidates.filter(c => ACTIVE_STAGES.includes(c.stage)).length;
   const avg = total ? Math.round(candidates.reduce((s, c) => s + c.score, 0) / total) : 0;
-  $('[data-stat="total"]').textContent = total;
-  $('[data-stat="shortlisted"]').textContent = shortlisted;
-  $('[data-stat="avg"]').textContent = avg;
+  countTo($('[data-stat="total"]'), total);
+  countTo($('[data-stat="shortlisted"]'), shortlisted);
+  countTo($('[data-stat="avg"]'), avg);
+}
+
+/* ---------- Rotating department ticker ---------- */
+function startTicker() {
+  const el = $('#rotateWord'); if (!el) return;
+  const names = Object.values(DEPARTMENTS).map(d => d.name);
+  let i = 0;
+  setInterval(() => {
+    i = (i + 1) % names.length;
+    el.classList.add('swap');
+    setTimeout(() => { el.textContent = names[i]; el.classList.remove('swap'); }, 350);
+  }, 2400);
+}
+
+/* ---------- Scroll reveal ---------- */
+function initReveal() {
+  const els = $$('.reveal');
+  if (!('IntersectionObserver' in window)) { els.forEach(e => e.classList.add('in')); return; }
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(en => { if (en.isIntersecting) { en.target.classList.add('in'); io.unobserve(en.target); } });
+  }, { threshold: 0.15 });
+  els.forEach(e => io.observe(e));
+}
+
+/* ---------- Hero talent-network background ---------- */
+function initHeroNetwork() {
+  const canvas = $('#netCanvas');
+  if (!canvas) return;
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const ctx = canvas.getContext('2d');
+  let w, h, nodes, raf;
+  const COUNT = 46, LINK = 130;
+
+  function resize() {
+    const r = canvas.parentElement.getBoundingClientRect();
+    w = canvas.width = r.width; h = canvas.height = r.height;
+  }
+  function build() {
+    nodes = Array.from({ length: COUNT }, () => ({
+      x: Math.random() * w, y: Math.random() * h,
+      vx: (Math.random() - 0.5) * 0.35, vy: (Math.random() - 0.5) * 0.35
+    }));
+  }
+  function step() {
+    ctx.clearRect(0, 0, w, h);
+    for (const n of nodes) {
+      n.x += n.vx; n.y += n.vy;
+      if (n.x < 0 || n.x > w) n.vx *= -1;
+      if (n.y < 0 || n.y > h) n.vy *= -1;
+    }
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i], b = nodes[j];
+        const dx = a.x - b.x, dy = a.y - b.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < LINK) {
+          ctx.strokeStyle = `rgba(61,164,240,${(1 - dist / LINK) * 0.32})`;
+          ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+        }
+      }
+    }
+    for (const n of nodes) {
+      ctx.fillStyle = 'rgba(116,194,255,0.8)';
+      ctx.beginPath(); ctx.arc(n.x, n.y, 1.8, 0, Math.PI * 2); ctx.fill();
+    }
+    raf = requestAnimationFrame(step);
+  }
+  resize(); build(); step();
+  window.addEventListener('resize', () => { cancelAnimationFrame(raf); resize(); build(); step(); });
 }
 
 /* ---------- Init ---------- */
 initDepartments();
 updateHeroStats();
+startTicker();
+initReveal();
+initHeroNetwork();
