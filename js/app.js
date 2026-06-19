@@ -206,6 +206,27 @@ const CONTACT = {
   linkedin: /linkedin\.com\/[a-z0-9-]+/i
 };
 
+/* universe of all known skills/tools/certs across departments (for JD parsing) */
+const ALL_SKILLS = [...new Set(Object.values(DEPARTMENTS)
+  .flatMap(d => [...d.core, ...d.tools, ...d.certs]))];
+const STOPWORDS = new Set(('the a an and or of to in for with on at by from as is are be will should must has have we you our your they their this that role job description responsibilities requirements candidate company team work working experience years year strong good excellent ability able knowledge skills skill etc plus preferred required must-have including include such per across using used use within into out over under more most than then also can may').split(/\s+/));
+
+/* derive the important keywords from a pasted job description */
+function extractJDKeywords(jd) {
+  const lower = jd.toLowerCase();
+  const keys = new Set();
+  // 1) known multi-word skills present in the JD (most reliable)
+  ALL_SKILLS.forEach(sk => { if (lower.includes(sk.toLowerCase())) keys.add(sk); });
+  // 2) frequent significant single tokens from the JD
+  const freq = {};
+  (lower.match(/[a-z][a-z+#.]{2,}/g) || []).forEach(t => {
+    if (STOPWORDS.has(t) || t.length < 4) return;
+    freq[t] = (freq[t] || 0) + 1;
+  });
+  Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 16).forEach(([t]) => keys.add(t));
+  return [...keys].slice(0, 28);
+}
+
 /* ---------- State ---------- */
 const LS_KEY = 'aarti_talentforge_v2';
 const STAGES = ['New', 'Shortlisted', 'Interview', 'Selected', 'Rejected'];
@@ -251,6 +272,7 @@ function activateTab(id) {
   const panel = document.getElementById(id);
   if (panel) setTimeout(() => $$('.reveal', panel).forEach(e => e.classList.add('in')), 60);
   if (id === 'pool') renderPool();
+  if (id === 'analytics') renderAnalytics();
 }
 document.addEventListener('click', e => {
   const link = e.target.closest('[data-tab]');
@@ -262,10 +284,11 @@ $('#navToggle').addEventListener('click', () => $('#mainNav').classList.toggle('
 
 /* ---------- Init departments ---------- */
 function initDepartments() {
-  const sel = $('#deptSelect'), filterSel = $('#filterDept'), grid = $('#deptGrid');
+  const sel = $('#deptSelect'), filterSel = $('#filterDept'), grid = $('#deptGrid'), bulkSel = $('#bulkDept');
   Object.entries(DEPARTMENTS).forEach(([key, d]) => {
     sel.insertAdjacentHTML('beforeend', `<option value="${key}">${d.emoji} ${d.name}</option>`);
     filterSel.insertAdjacentHTML('beforeend', `<option value="${key}">${d.name}</option>`);
+    if (bulkSel) bulkSel.insertAdjacentHTML('beforeend', `<option value="${key}">${d.emoji} ${d.name}</option>`);
     grid.insertAdjacentHTML('beforeend', `
       <div class="dept-tile reveal">
         <div class="dept-emoji">${d.emoji}</div>
@@ -293,14 +316,24 @@ function matchList(lower, list) {
   return { found, missing };
 }
 
-function analyzeResume(text, deptKey, minExp) {
+function analyzeResume(text, deptKey, minExp, jdText) {
   const lower = text.toLowerCase();
   const dept = DEPARTMENTS[deptKey];
   const wordCount = (text.match(/\b[\w.+#]+\b/g) || []).length;
 
-  // 1 — Core domain skills (30)
+  // 1 — Core domain skills (30), blended with a Job Description when provided
   const coreM = matchList(lower, dept.core);
-  const coreScore = Math.round((coreM.found.length / dept.core.length) * 30);
+  const deptRatio = coreM.found.length / dept.core.length;
+  let jdMatched = [], jdRatio = 0, jdUsed = false;
+  if (jdText && jdText.trim().length > 25) {
+    jdUsed = true;
+    const jdKeys = extractJDKeywords(jdText);
+    const jdM = matchList(lower, jdKeys);
+    jdMatched = jdM.found;
+    jdRatio = jdKeys.length ? jdM.found.length / jdKeys.length : 0;
+  }
+  const blended = jdUsed ? (deptRatio * 0.5 + jdRatio * 0.5) : deptRatio;
+  const coreScore = Math.round(blended * 30);
 
   // 2 — Tools / systems (12)
   const toolM = matchList(lower, dept.tools);
@@ -360,10 +393,11 @@ function analyzeResume(text, deptKey, minExp) {
   const missing = [...coreM.missing.slice(0, 8), ...toolM.missing.slice(0, 3)];
 
   // AI insights
-  const insights = buildInsights({ dept, coreM, toolM, certM, years, minExp, eduLevel, fieldMatch, metricHits, verbHits, contacts, total });
+  const insights = buildInsights({ dept, coreM, toolM, certM, years, minExp, eduLevel, fieldMatch, metricHits, verbHits, contacts, total, jdUsed, jdMatched });
 
   return {
     total, verdict, vcolor, matched, missing, years, wordCount, contacts, eduLevel, fieldMatch,
+    jdUsed, jdMatched,
     coreRatio: Math.round((coreM.found.length / dept.core.length) * 100),
     breakdown: [
       { label: 'Core Skills', score: coreScore, max: 30 },
@@ -394,6 +428,7 @@ function buildInsights(d) {
   else out.push(['⚠️', 'Education level could not be detected.']);
 
   if (d.certM.found.length) out.push(['🏅', `Relevant certifications found: ${d.certM.found.join(', ')}.`]);
+  if (d.jdUsed) out.push([d.jdMatched.length >= 4 ? '🎯' : '⚠️', `Job-description match: ${d.jdMatched.length} key requirement(s) found in the resume.`]);
   if (d.metricHits) out.push(['📈', `Resume shows ${d.metricHits} quantified result(s) — good evidence of impact.`]);
   else out.push(['💡', 'Tip: candidate could strengthen the resume with measurable achievements.']);
 
@@ -430,11 +465,7 @@ async function handleFile(file) {
     $('#pasteArea').value = text.slice(0, 5000);
     status.textContent = `✓ Loaded "${file.name}" (${(text.match(/\b\w+\b/g) || []).length} words)`;
     $('#analyzeBtn').disabled = false;
-    if (!$('#candName').value) {
-      const guess = file.name.replace(/\.(pdf|txt)$/i, '').replace(/[_-]+/g, ' ').replace(/resume|cv|final|updated/gi, '').trim();
-      if (guess) $('#candName').value = guess.replace(/\b\w/g, c => c.toUpperCase());
-    }
-    prefillContacts(text);
+    applyParsedInfo(text, file.name);
   } catch (err) {
     status.classList.add('err'); status.textContent = '✗ ' + err.message;
     resumeText = ''; $('#analyzeBtn').disabled = true;
@@ -463,6 +494,50 @@ function prefillContacts(text) {
   $('#contactPrefill').textContent = found.length ? `Auto-detected ${found.join(' & ')} from the resume — please verify.` : '';
 }
 
+/* ---------- Smarter parsing: name, contacts, experience ---------- */
+function guessName(text, email, fileName) {
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean).slice(0, 8);
+  const bad = /resume|curriculum|vitae|profile|summary|objective|email|e-mail|phone|mobile|tel|contact|address|linkedin|github|@|http|www|\d{4}/i;
+  for (const l of lines) {
+    if (bad.test(l) || l.length > 40) continue;
+    const words = l.split(/\s+/);
+    if (words.length >= 2 && words.length <= 4 && words.every(w => /^[A-Za-z][A-Za-z.'-]*$/.test(w))) {
+      return l.replace(/\b\w/g, c => c.toUpperCase());
+    }
+  }
+  if (email) {
+    const lp = email.split('@')[0].replace(/[._\d]+/g, ' ').trim();
+    if (lp && lp.length > 2) return lp.replace(/\b\w/g, c => c.toUpperCase());
+  }
+  if (fileName) {
+    const g = fileName.replace(/\.(pdf|txt)$/i, '').replace(/[_-]+/g, ' ').replace(/resume|cv|final|updated/gi, '').trim();
+    if (g) return g.replace(/\b\w/g, c => c.toUpperCase());
+  }
+  return '';
+}
+function extractCandidateInfo(text, fileName) {
+  const em = text.match(CONTACT.email);
+  const ph = text.match(CONTACT.phone);
+  let years = 0;
+  [...text.toLowerCase().matchAll(/(\d{1,2})\s*\+?\s*(?:years|yrs|year)/g)].forEach(m => { years = Math.max(years, +m[1]); });
+  return {
+    name: guessName(text, em ? em[0] : '', fileName),
+    email: em ? em[0] : '',
+    phone: ph ? ph[0].trim() : '',
+    years
+  };
+}
+function applyParsedInfo(text, fileName) {
+  const info = extractCandidateInfo(text, fileName);
+  const found = [];
+  if (info.name && !$('#candName').value) $('#candName').value = info.name;
+  if (info.email && !$('#candEmail').value) { $('#candEmail').value = info.email; found.push('email'); }
+  if (info.phone && !$('#candPhone').value) { $('#candPhone').value = info.phone; found.push('phone'); }
+  $('#contactPrefill').textContent =
+    (info.name ? `Detected name "${info.name}"` : 'Name not auto-detected') +
+    (found.length ? ` · auto-filled ${found.join(' & ')}` : '') + ' — please verify.';
+}
+
 /* ===================================================
    ANALYZE + RENDER
    =================================================== */
@@ -470,6 +545,7 @@ $('#analyzeBtn').addEventListener('click', () => {
   if (!resumeText || resumeText.trim().length < 30) { toast('Please upload or paste a resume first.'); return; }
   const deptKey = $('#deptSelect').value;
   const minExp = parseInt($('#minExp').value, 10) || 0;
+  const jdText = $('#jdText') ? $('#jdText').value : '';
   const btn = $('#analyzeBtn');
   const overlay = $('#scanOverlay');
 
@@ -480,7 +556,7 @@ $('#analyzeBtn').addEventListener('click', () => {
 
   setTimeout(() => {
     try {
-      currentAnalysis = analyzeResume(resumeText, deptKey, minExp);
+      currentAnalysis = analyzeResume(resumeText, deptKey, minExp, jdText);
       currentAnalysis.dept = deptKey;
       currentAnalysis.name = $('#candName').value.trim() || 'Unnamed Candidate';
       renderResult(currentAnalysis);
@@ -511,7 +587,8 @@ function renderResult(a) {
   $('#verdict').innerHTML = `<span class="pill" style="background:${a.vcolor}">${a.verdict}</span>`;
   $('#metaLine').innerHTML =
     `${DEPARTMENTS[a.dept].emoji} ${DEPARTMENTS[a.dept].name} · ${a.coreRatio}% core match` +
-    `${a.years ? ' · ' + a.years + ' yrs exp' : ''} · ${a.eduLevel}`;
+    `${a.years ? ' · ' + a.years + ' yrs exp' : ''} · ${a.eduLevel}` +
+    `${a.jdUsed ? ' <span class="jd-active-badge">JD matched · ' + a.jdMatched.length + ' terms</span>' : ''}`;
 
   $('#breakdown').innerHTML = a.breakdown.map(b => `
     <div class="bd-row">
@@ -549,7 +626,7 @@ function highlightText(text, terms) {
 
 $('#rescanBtn').addEventListener('click', () => {
   resumeText = ''; currentAnalysis = null;
-  ['pasteArea','candName','candPosition','candEmail','candPhone','candNotes'].forEach(id => $('#' + id).value = '');
+  ['pasteArea','candName','candPosition','candEmail','candPhone','candNotes','jdText'].forEach(id => { const el = $('#' + id); if (el) el.value = ''; });
   $('#candSource').selectedIndex = 0;
   $('#contactPrefill').textContent = '';
   $('#fileStatus').textContent = ''; fileInput.value = '';
@@ -557,20 +634,44 @@ $('#rescanBtn').addEventListener('click', () => {
   $('#analyzeBtn').disabled = true;
 });
 
+/* build a candidate record from an analysis + extra fields */
+function buildCandidate(a, extra) {
+  return Object.assign({
+    id: Date.now() + Math.floor(Math.random() * 1000),
+    name: a.name, dept: a.dept, score: a.total, verdict: a.verdict,
+    skills: a.matched.slice(0, 4),
+    matchedAll: a.matched.slice(0, 20),
+    gaps: a.missing.slice(0, 10),
+    years: a.years, edu: a.eduLevel,
+    position: '', email: '', phone: '', source: 'Other', notes: '',
+    date: new Date().toISOString(),
+    stage: a.total >= 65 ? 'Shortlisted' : 'New'
+  }, extra || {});
+}
+
+/* add with duplicate-by-email detection. returns 'added' | 'duplicate' */
+function addCandidate(cand) {
+  const email = (cand.email || '').trim().toLowerCase();
+  if (email && candidates.some(c => (c.email || '').trim().toLowerCase() === email)) return 'duplicate';
+  candidates.push(cand);
+  return 'added';
+}
+
 $('#saveBtn').addEventListener('click', () => {
   if (!currentAnalysis) return;
   const a = currentAnalysis;
-  candidates.push({
-    id: Date.now(), name: a.name, dept: a.dept, score: a.total, verdict: a.verdict,
-    skills: a.matched.slice(0, 4), years: a.years, edu: a.eduLevel,
+  const cand = buildCandidate(a, {
     position: $('#candPosition').value.trim(),
     email: $('#candEmail').value.trim(),
     phone: $('#candPhone').value.trim(),
     source: $('#candSource').value,
-    notes: $('#candNotes').value.trim(),
-    date: new Date().toISOString(),
-    stage: a.total >= 65 ? 'Shortlisted' : 'New'
+    notes: $('#candNotes').value.trim()
   });
+  const email = cand.email.toLowerCase();
+  if (email && candidates.some(c => (c.email || '').toLowerCase() === email)) {
+    if (!confirm(`A candidate with email "${cand.email}" already exists. Add anyway as a duplicate?`)) return;
+  }
+  candidates.push(cand);
   saveCandidates();
   toast(`Saved "${a.name}" to the candidate pool.`);
   updateHeroStats();
@@ -596,17 +697,23 @@ function renderPool() {
 
   const body = $('#poolBody');
   $('#poolEmpty').style.display = list.length ? 'none' : 'block';
+  const blind = isBlind();
   body.innerHTML = list.map((c, i) => {
     const d = DEPARTMENTS[c.dept];
     const chips = (c.skills || []).map(s => `<span class="mini-chip">${s}</span>`).join('') || '—';
     const opts = STAGES.map(s => `<option value="${s}" ${c.stage === s ? 'selected' : ''}>${s}</option>`).join('');
+    const checked = compareSel.has(c.id) ? 'checked' : '';
+    const name = blind ? maskName(c) : escapeHtml(c.name);
+    const contactRow = (!blind && c.email)
+      ? `<div class="cand-sub">✉ ${escapeHtml(c.email)}${c.phone ? ' · ☎ ' + escapeHtml(c.phone) : ''}</div>` : '';
     return `
       <tr>
+        <td data-label=""><input type="checkbox" class="row-check" data-id="${c.id}" ${checked} /></td>
         <td data-label="Rank"><span class="rank-badge ${i === 0 ? 'top' : ''}">${i + 1}</span></td>
         <td data-label="Candidate">
-          <div class="cand-name">${escapeHtml(c.name)}</div>
+          <div class="cand-name">${name}</div>
           <div class="cand-sub">${c.position ? escapeHtml(c.position) + ' · ' : ''}${c.years ? c.years + ' yrs · ' : ''}${c.edu || ''}</div>
-          ${c.email ? `<div class="cand-sub">✉ ${escapeHtml(c.email)}${c.phone ? ' · ☎ ' + escapeHtml(c.phone) : ''}</div>` : ''}
+          ${contactRow}
         </td>
         <td data-label="Department"><span class="dept-tag">${d ? d.emoji + ' ' + d.name : c.dept}</span></td>
         <td data-label="Score"><span class="score-tag" style="background:${scoreColor(c.score)}">${c.score}</span></td>
@@ -619,6 +726,7 @@ function renderPool() {
         </td>
       </tr>`;
   }).join('');
+  updateCompareBtn();
 }
 
 /* HR Insights dashboard */
@@ -659,6 +767,8 @@ $('#poolBody').addEventListener('change', e => {
   const c = candidates.find(x => x.id === Number(sel.dataset.id));
   if (!c) return;
   c.stage = sel.value;
+  c.stageAt = new Date().toISOString();
+  if (sel.value === 'Selected' && !c.selectedAt) c.selectedAt = c.stageAt;
   saveCandidates(); renderPool(); updateHeroStats();
 });
 
@@ -676,7 +786,9 @@ $('#clearBtn').addEventListener('click', () => {
   }
 });
 
-$('#exportBtn').addEventListener('click', () => {
+$('#exportBtn').addEventListener('click', exportCSV);
+
+function exportCSV() {
   if (!candidates.length) { toast('Nothing to export.'); return; }
   const rows = [['Name','Position','Department','Score','Verdict','Experience(yrs)','Education','Email','Phone','Source','Stage','TopSkills','Notes','Date']];
   candidates.slice().sort((a, b) => b.score - a.score).forEach(c => {
@@ -691,8 +803,8 @@ $('#exportBtn').addEventListener('click', () => {
   const a = document.createElement('a');
   a.href = url; a.download = 'aarti_talentforge_candidates.csv'; a.click();
   URL.revokeObjectURL(url);
-  toast('Exported shortlist to CSV.');
-});
+  toast('Exported to CSV — ready for Google Sheets / Excel.');
+}
 
 /* ---------- Hero stats (animated count-up) ---------- */
 function countTo(el, target) {
@@ -791,3 +903,507 @@ updateHeroStats();
 startTicker();
 initReveal();
 initHeroNetwork();
+
+/* ===================================================
+   v3 FEATURES
+   =================================================== */
+
+/* ---------- Blind screening ---------- */
+const BLIND_KEY = 'aarti_blind';
+function isBlind() { return document.body.classList.contains('blind'); }
+function maskName(c) { return 'Candidate ' + (c.id || 0).toString(36).slice(-4).toUpperCase(); }
+function initBlind() {
+  const on = localStorage.getItem(BLIND_KEY) === '1';
+  const t = $('#blindToggle');
+  document.body.classList.toggle('blind', on);
+  if (t) {
+    t.checked = on;
+    t.addEventListener('change', () => {
+      document.body.classList.toggle('blind', t.checked);
+      localStorage.setItem(BLIND_KEY, t.checked ? '1' : '0');
+      renderPool();
+      if (t.checked) openBlindModal();
+      else openBlindOffModal();
+    });
+  }
+  // explainer modal controls
+  $$('[data-blind-close]').forEach(el => el.addEventListener('click', closeBlindModal));
+  const keep = $('[data-blind-keep]');
+  if (keep) keep.addEventListener('click', closeBlindModal);
+  const off = $('[data-blind-off]');
+  if (off) off.addEventListener('click', () => {
+    const tog = $('#blindToggle');
+    if (tog) tog.checked = false;
+    document.body.classList.remove('blind');
+    localStorage.setItem(BLIND_KEY, '0');
+    renderPool();
+    closeBlindModal();
+    openBlindOffModal();
+  });
+  // OFF modal controls
+  $$('[data-blindoff-close]').forEach(el => el.addEventListener('click', closeBlindOffModal));
+  const reon = $('[data-blind-reon]');
+  if (reon) reon.addEventListener('click', () => {
+    const tog = $('#blindToggle');
+    if (tog) tog.checked = true;
+    document.body.classList.add('blind');
+    localStorage.setItem(BLIND_KEY, '1');
+    renderPool();
+    closeBlindOffModal();
+    openBlindModal();
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeBlindModal(); closeBlindOffModal(); } });
+}
+function openBlindModal() {
+  const m = $('#blindModal');
+  if (m) m.hidden = false;
+}
+function closeBlindModal() {
+  const m = $('#blindModal');
+  if (m) m.hidden = true;
+}
+function openBlindOffModal() {
+  const m = $('#blindModalOff');
+  if (m) m.hidden = false;
+}
+function closeBlindOffModal() {
+  const m = $('#blindModalOff');
+  if (m) m.hidden = true;
+}
+
+/* ---------- Side-by-side comparison ---------- */
+const compareSel = new Set();
+function updateCompareBtn() {
+  const btn = $('#compareBtn'); if (!btn) return;
+  btn.textContent = `Compare (${compareSel.size})`;
+  btn.disabled = !(compareSel.size === 2 || compareSel.size === 3);
+}
+$('#poolBody').addEventListener('change', e => {
+  const chk = e.target.closest('.row-check'); if (!chk) return;
+  const id = Number(chk.dataset.id);
+  if (chk.checked) {
+    if (compareSel.size >= 3) { chk.checked = false; toast('Compare up to 3 candidates at a time.'); return; }
+    compareSel.add(id);
+  } else compareSel.delete(id);
+  updateCompareBtn();
+});
+const selectAllEl = $('#selectAll');
+if (selectAllEl) selectAllEl.addEventListener('change', () => {
+  const checks = $$('#poolBody .row-check');
+  compareSel.clear();
+  checks.forEach(c => {
+    if (selectAllEl.checked && compareSel.size < 3) { c.checked = true; compareSel.add(Number(c.dataset.id)); }
+    else c.checked = false;
+  });
+  if (selectAllEl.checked && checks.length > 3) toast('Selected the first 3 (max for comparison).');
+  updateCompareBtn();
+});
+$('#compareBtn').addEventListener('click', () => {
+  const chosen = candidates.filter(c => compareSel.has(c.id));
+  if (chosen.length < 2) return;
+  renderComparison(chosen);
+  openModal();
+});
+function renderComparison(list) {
+  const blind = isBlind();
+  const top = Math.max(...list.map(c => c.score));
+  const head = list.map(c => `<th>${blind ? maskName(c) : escapeHtml(c.name)}</th>`).join('');
+  const row = (label, fn) => `<tr><td class="cmp-rowlabel">${label}</td>${list.map(c => `<td>${fn(c)}</td>`).join('')}</tr>`;
+  const chips = arr => (arr && arr.length) ? arr.map(s => `<span class="cmp-chip">${s}</span>`).join('') : '<span class="cmp-chip">—</span>';
+  const gaps = arr => (arr && arr.length) ? arr.map(s => `<span class="cmp-chip gap">${s}</span>`).join('') : '<span class="cmp-chip">—</span>';
+
+  $('#compareBody').innerHTML = `
+    <table class="cmp-table">
+      <thead><tr><th>Attribute</th>${head}</tr></thead>
+      <tbody>
+        ${row('Score', c => `<div class="cmp-score ${c.score === top ? 'cmp-winner' : ''}" style="color:${scoreColor(c.score)}">${c.score}</div>`)}
+        ${row('Verdict', c => c.verdict || '—')}
+        ${row('Department', c => DEPARTMENTS[c.dept] ? DEPARTMENTS[c.dept].name : c.dept)}
+        ${row('Experience', c => c.years ? c.years + ' yrs' : '—')}
+        ${row('Education', c => c.edu || '—')}
+        ${row('Stage', c => c.stage || '—')}
+        ${row('Source', c => c.source || '—')}
+        ${row('Matched skills', c => chips(c.matchedAll || c.skills))}
+        ${row('Gaps', c => gaps(c.gaps))}
+      </tbody>
+    </table>`;
+}
+function openModal() { $('#compareModal').hidden = false; }
+function closeModal() { $('#compareModal').hidden = true; }
+$$('[data-close-modal]').forEach(el => el.addEventListener('click', closeModal));
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+/* ---------- Bulk scanning ---------- */
+let bulkResults = [];
+const bulkDz = $('#bulkDropzone'), bulkInput = $('#bulkFileInput');
+if (bulkDz) {
+  bulkDz.addEventListener('click', () => bulkInput.click());
+  bulkInput.addEventListener('change', e => processBulk([...e.target.files]));
+  ['dragover', 'dragenter'].forEach(ev => bulkDz.addEventListener(ev, e => { e.preventDefault(); bulkDz.classList.add('drag'); }));
+  ['dragleave', 'drop'].forEach(ev => bulkDz.addEventListener(ev, e => { e.preventDefault(); bulkDz.classList.remove('drag'); }));
+  bulkDz.addEventListener('drop', e => { if (e.dataTransfer.files.length) processBulk([...e.dataTransfer.files]); });
+}
+async function processBulk(files) {
+  if (!files.length) return;
+  files = files.slice(0, 30);
+  const deptKey = $('#bulkDept').value;
+  const minExp = parseInt($('#bulkMinExp').value, 10) || 0;
+  const source = $('#bulkSource').value;
+  const status = $('#bulkStatus');
+  bulkResults = [];
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    status.classList.remove('err');
+    status.textContent = `Processing ${i + 1} / ${files.length}: ${f.name}...`;
+    try {
+      const text = await extractText(f);
+      if (!text || text.trim().length < 30) throw new Error('unreadable');
+      const info = extractCandidateInfo(text, f.name);
+      const a = analyzeResume(text, deptKey, minExp);
+      a.dept = deptKey;
+      a.name = info.name || 'Unnamed Candidate';
+      const dup = info.email && candidates.some(c => (c.email || '').toLowerCase() === info.email.toLowerCase());
+      bulkResults.push({ analysis: a, info, source, status: dup ? 'dup' : 'new' });
+    } catch (err) {
+      bulkResults.push({ info: { name: f.name }, error: true, status: 'err' });
+    }
+  }
+  bulkResults.sort((x, y) => (y.analysis ? y.analysis.total : -1) - (x.analysis ? x.analysis.total : -1));
+  status.textContent = `Done — ${bulkResults.filter(r => !r.error).length} scored, ${bulkResults.filter(r => r.status === 'dup').length} possible duplicate(s), ${bulkResults.filter(r => r.error).length} unreadable.`;
+  renderBulk();
+}
+function renderBulk() {
+  const wrap = $('#bulkResultWrap');
+  wrap.hidden = bulkResults.length === 0;
+  $('#bulkResultTitle').textContent = `Ranked Results (${bulkResults.filter(r => !r.error).length})`;
+  const blind = isBlind();
+  $('#bulkBody').innerHTML = bulkResults.map((r, i) => {
+    if (r.error) {
+      return `<tr><td>—</td><td data-label="Candidate">${escapeHtml(r.info.name)}</td><td colspan="3">Could not read text (scanned image?)</td><td><span class="bulk-badge err">Unreadable</span></td></tr>`;
+    }
+    const a = r.analysis;
+    const name = blind ? 'Candidate ' + (i + 1) : escapeHtml(a.name);
+    const chips = a.matched.slice(0, 4).map(s => `<span class="mini-chip">${s}</span>`).join('') || '—';
+    const badge = r.status === 'dup' ? '<span class="bulk-badge dup">Duplicate?</span>' : '<span class="bulk-badge new">New</span>';
+    return `
+      <tr>
+        <td data-label="Rank"><span class="rank-badge ${i === 0 ? 'top' : ''}">${i + 1}</span></td>
+        <td data-label="Candidate"><div class="cand-name">${name}</div>${!blind && r.info.email ? `<div class="cand-sub">✉ ${escapeHtml(r.info.email)}</div>` : ''}</td>
+        <td data-label="Score"><span class="score-tag" style="background:${scoreColor(a.total)}">${a.total}</span></td>
+        <td data-label="Exp.">${a.years ? a.years + ' yrs' : '—'}</td>
+        <td data-label="Skills"><div class="mini-chips">${chips}</div></td>
+        <td data-label="Status">${badge}</td>
+      </tr>`;
+  }).join('');
+}
+$('#bulkAddAll').addEventListener('click', () => {
+  let added = 0, skipped = 0;
+  bulkResults.forEach(r => {
+    if (r.error) return;
+    const cand = buildCandidate(r.analysis, {
+      email: r.info.email || '', phone: r.info.phone || '', source: r.source || 'Other'
+    });
+    if (addCandidate(cand) === 'added') { added++; r.status = 'added'; }
+    else skipped++;
+  });
+  saveCandidates(); updateHeroStats();
+  toast(`Added ${added} candidate(s)${skipped ? `, skipped ${skipped} duplicate(s)` : ''}.`);
+  // reflect "added" badges
+  $$('#bulkBody .bulk-badge.new').forEach(b => { b.className = 'bulk-badge added'; b.textContent = 'Added'; });
+});
+$('#bulkClear').addEventListener('click', () => {
+  bulkResults = []; $('#bulkBody').innerHTML = ''; $('#bulkResultWrap').hidden = true;
+  $('#bulkStatus').textContent = ''; if (bulkInput) bulkInput.value = '';
+});
+
+/* ---------- Hiring analytics ---------- */
+function bar(label, value, max, cls) {
+  const pct = max ? Math.round((value / max) * 100) : 0;
+  return `<div class="an-row ${cls || ''}"><span class="al" title="${escapeHtml(label)}">${escapeHtml(label)}</span>
+    <div class="an-track"><div class="an-fill" style="width:0" data-w="${pct}"></div></div>
+    <span class="av">${value}</span></div>`;
+}
+function renderAnalytics() {
+  const total = candidates.length;
+  $('#analyticsEmpty').style.display = total ? 'none' : 'block';
+  $('#analyticsBody').hidden = !total;
+  if (!total) return;
+
+  const selected = candidates.filter(c => c.stage === 'Selected');
+  const avgScore = Math.round(candidates.reduce((s, c) => s + c.score, 0) / total);
+  // time-to-hire
+  const tth = selected.filter(c => c.selectedAt && c.date)
+    .map(c => (new Date(c.selectedAt) - new Date(c.date)) / 86400000);
+  const avgTth = tth.length ? Math.round(tth.reduce((a, b) => a + b, 0) / tth.length) : null;
+
+  $('#anKpis').innerHTML = `
+    <div class="kpi"><div class="kpi-val">${total}</div><div class="kpi-label">Total Candidates</div></div>
+    <div class="kpi green"><div class="kpi-val">${selected.length}</div><div class="kpi-label">Selected</div></div>
+    <div class="kpi amber"><div class="kpi-val">${avgScore}</div><div class="kpi-label">Avg. Score</div></div>
+    <div class="kpi blue"><div class="kpi-val">${avgTth === null ? '—' : avgTth + 'd'}</div><div class="kpi-label">Avg. Time-to-Hire</div></div>`;
+
+  // funnel
+  $('#anFunnel').innerHTML = STAGES.map(s =>
+    bar(s, candidates.filter(c => c.stage === s).length, total, 'funnel-row')).join('');
+
+  // department demand
+  const deptCount = {};
+  candidates.forEach(c => { deptCount[c.dept] = (deptCount[c.dept] || 0) + 1; });
+  const deptArr = Object.entries(deptCount).sort((a, b) => b[1] - a[1]);
+  const deptMax = deptArr.length ? deptArr[0][1] : 0;
+  $('#anDept').innerHTML = deptArr.map(([k, n]) =>
+    bar(DEPARTMENTS[k] ? DEPARTMENTS[k].name : k, n, deptMax)).join('');
+
+  // source effectiveness (avg score per source)
+  const src = {};
+  candidates.forEach(c => {
+    const s = c.source || 'Other';
+    (src[s] = src[s] || { n: 0, sum: 0, sel: 0 });
+    src[s].n++; src[s].sum += c.score; if (c.stage === 'Selected') src[s].sel++;
+  });
+  const srcArr = Object.entries(src).sort((a, b) => b[1].n - a[1].n);
+  const srcMax = srcArr.length ? srcArr[0][1].n : 0;
+  $('#anSource').innerHTML = srcArr.map(([k, v]) => {
+    const avg = Math.round(v.sum / v.n);
+    const pct = srcMax ? Math.round((v.n / srcMax) * 100) : 0;
+    return `<div class="an-row"><span class="al" title="${escapeHtml(k)}">${escapeHtml(k)}</span>
+      <div class="an-track"><div class="an-fill" style="width:0" data-w="${pct}"></div></div>
+      <span class="av">${v.n} · ⌀${avg}</span></div>`;
+  }).join('');
+
+  setTimeout(() => $$('#analyticsBody .an-fill').forEach(f => f.style.width = f.dataset.w + '%'), 60);
+}
+
+/* ---------- Integrations ---------- */
+$('#anExportSheets').addEventListener('click', exportCSV);
+$('#anJobPost').addEventListener('click', () => {
+  // pick the most-demanded department, else the first
+  const deptCount = {};
+  candidates.forEach(c => { deptCount[c.dept] = (deptCount[c.dept] || 0) + 1; });
+  const key = Object.entries(deptCount).sort((a, b) => b[1] - a[1])[0]?.[0] || Object.keys(DEPARTMENTS)[0];
+  const d = DEPARTMENTS[key];
+  const skills = d.core.slice(0, 8).join(', ');
+  const post =
+`🚀 Aarti Steels Ltd is Hiring — ${d.name}
+
+We are looking for talented professionals to join our ${d.name} function at our Ludhiana / Cuttack plants.
+
+Key skills: ${skills}.
+
+Apply with your updated resume. Be part of a fully integrated carbon & alloy steel manufacturer trusted since 1979.
+
+#Hiring #Steel #${d.name.replace(/[^a-z]/gi, '')} #AartiSteels #NowHiring`;
+
+  if (navigator.clipboard) navigator.clipboard.writeText(post).catch(() => {});
+  toast('Job post copied to clipboard — paste it into LinkedIn / Naukri.');
+  window.open('https://www.linkedin.com/feed/', '_blank', 'noopener');
+});
+
+/* ---------- PDF Scorecard (self-contained, printed via iframe) ---------- */
+$('#scorecardBtn').addEventListener('click', () => {
+  if (!currentAnalysis) { toast('Analyze a resume first.'); return; }
+  printScorecard(currentAnalysis);
+});
+function printScorecard(a) {
+  const blind = isBlind();
+  const name = blind ? 'Confidential Candidate' : escapeHtml(a.name);
+  const d = DEPARTMENTS[a.dept];
+  const bd = a.breakdown.map(b => {
+    const pct = Math.round((b.score / b.max) * 100);
+    return `<div class="sc-bd"><span class="l">${b.label}</span>
+      <span class="t"><i style="width:${pct}%"></i></span>
+      <span class="v">${b.score} / ${b.max}</span></div>`;
+  }).join('');
+  const matched = a.matched.length ? a.matched.map(s => `<span>${escapeHtml(s)}</span>`).join('') : '<span>—</span>';
+  const gaps = a.missing.length ? a.missing.map(s => `<span class="gap">${escapeHtml(s)}</span>`).join('') : '<span>—</span>';
+
+  const doc = `<!doctype html><html><head><meta charset="utf-8"><title>Scorecard — ${name}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, Helvetica, sans-serif; color: #1a1a1a; background: #fff; padding: 34px 38px; }
+    .head { display: flex; align-items: center; gap: 16px; border-bottom: 3px solid #3da4f0; padding-bottom: 16px; margin-bottom: 22px; }
+    .logo { border: 3px solid #3da4f0; padding: 5px 14px 7px; display: inline-flex; flex-direction: column; align-items: center; }
+    .logo b { font-family: 'Brush Script MT', cursive; color: #3da4f0; font-size: 30px; line-height: 1; font-style: italic; }
+    .logo i { display: block; width: 100%; height: 13px; background: #3da4f0; margin-top: 5px; }
+    .title h1 { font-size: 24px; color: #14181d; }
+    .title p { color: #666; font-size: 13px; margin-top: 3px; }
+    .score { margin-left: auto; text-align: center; }
+    .score b { font-size: 46px; color: #3da4f0; line-height: 1; }
+    .score span { display: block; font-size: 12px; color: #555; margin-top: 4px; }
+    .verdict { display: inline-block; margin-top: 4px; padding: 3px 12px; border-radius: 20px; color: #fff; font-size: 12px; font-weight: bold; }
+    h2 { font-size: 14px; color: #14181d; border-left: 4px solid #3da4f0; padding-left: 9px; margin: 22px 0 10px; text-transform: uppercase; letter-spacing: .5px; }
+    .meta { font-size: 14px; color: #333; }
+    .meta strong { color: #14181d; }
+    .sc-bd { display: flex; align-items: center; gap: 12px; font-size: 13px; padding: 5px 0; border-bottom: 1px solid #eee; }
+    .sc-bd .l { width: 160px; color: #444; }
+    .sc-bd .t { flex: 1; height: 8px; background: #eef1f4; border-radius: 5px; overflow: hidden; }
+    .sc-bd .t i { display: block; height: 100%; background: #3da4f0; border-radius: 5px; }
+    .sc-bd .v { width: 60px; text-align: right; color: #14181d; font-weight: bold; }
+    .chips span { display: inline-block; font-size: 12px; background: #eaf4fd; color: #1c6fb0; border: 1px solid #c5e1f7; padding: 3px 10px; border-radius: 12px; margin: 3px 3px 0 0; }
+    .chips span.gap { background: #fdecea; color: #c0392b; border-color: #f5c6c0; }
+    .foot { margin-top: 28px; font-size: 11px; color: #999; border-top: 1px solid #ddd; padding-top: 12px; }
+  </style></head>
+  <body>
+    <div class="head">
+      <div class="logo"><b>Aarti</b><i></i></div>
+      <div class="title"><h1>Candidate Scorecard</h1><p>Aarti TalentForge · ${d ? d.name : a.dept}</p></div>
+      <div class="score"><b>${a.total}</b><span>out of 100</span>
+        <span class="verdict" style="background:${verdictHex(a.total)}">${a.verdict}</span></div>
+    </div>
+    <h2>Candidate</h2>
+    <p class="meta"><strong>${name}</strong>${a.years ? ' · ' + a.years + ' yrs experience' : ''} · ${a.eduLevel}${a.jdUsed ? ' · scored against a job description' : ''}</p>
+    <h2>Score Breakdown</h2>${bd}
+    <h2>Matched Skills</h2><div class="chips">${matched}</div>
+    <h2>Gaps / Recommended</h2><div class="chips">${gaps}</div>
+    <div class="foot">Generated by Aarti TalentForge on ${new Date().toLocaleString()}. Heuristic scoring — for internal HR use as a decision aid alongside human review.</div>
+  </body></html>`;
+
+  const iframe = document.createElement('iframe');
+  iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+  document.body.appendChild(iframe);
+  const idoc = iframe.contentWindow.document;
+  idoc.open(); idoc.write(doc); idoc.close();
+  const fire = () => {
+    try { iframe.contentWindow.focus(); iframe.contentWindow.print(); }
+    catch (e) { console.error(e); toast('Could not open print dialog.'); }
+    setTimeout(() => iframe.remove(), 1000);
+  };
+  // give the iframe a moment to render before printing
+  if (idoc.readyState === 'complete') setTimeout(fire, 350);
+  else iframe.onload = () => setTimeout(fire, 350);
+}
+function verdictHex(t) {
+  if (t >= 80) return '#27ae60';
+  if (t >= 65) return '#2f80c4';
+  if (t >= 50) return '#e0a82e';
+  return '#d8443c';
+}
+
+/* ---------- extra init ---------- */
+initBlind();
+
+/* ---------- Animated welcome splash ---------- */
+function initWelcome() {
+  const w = $('#welcome');
+  if (!w) return;
+
+  // personalised, time-aware greeting
+  const h = new Date().getHours();
+  const greet = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+  const g = $('#welcomeGreet');
+  if (g) g.textContent = `${greet}, HR — let's find the right talent.`;
+
+  const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // rising forge sparks
+  const sparks = $('#wcSparks');
+  if (sparks && !reduce) {
+    let html = '';
+    for (let i = 0; i < 16; i++) {
+      const left = Math.random() * 100;
+      const dur = 3 + Math.random() * 3.5;
+      const delay = Math.random() * 3;
+      const size = 2 + Math.random() * 3;
+      html += `<span class="wc-spark" style="left:${left}%;width:${size}px;height:${size}px;animation-duration:${dur}s;animation-delay:${delay}s"></span>`;
+    }
+    sparks.innerHTML = html;
+  }
+
+  // constellation canvas
+  const stopCanvas = (!reduce) ? startWelcomeCanvas() : null;
+
+  // boot-sequence status messages
+  const statusEl = $('#wcStatus');
+  const stages = [
+    [0, 'Initialising engine…'],
+    [25, 'Loading 14 department profiles…'],
+    [50, 'Calibrating AI scoring…'],
+    [75, 'Preparing your dashboard…'],
+    [100, 'Ready ✓']
+  ];
+  let stageIdx = -1;
+  const setStatus = p => {
+    let idx = 0;
+    for (let i = 0; i < stages.length; i++) if (p >= stages[i][0]) idx = i;
+    if (idx !== stageIdx && statusEl) {
+      stageIdx = idx;
+      statusEl.style.opacity = '0';
+      setTimeout(() => { statusEl.textContent = stages[idx][1]; statusEl.style.opacity = '1'; }, 130);
+    }
+  };
+
+  let done = false;
+  const dismiss = () => {
+    if (done) return; done = true;
+    clearInterval(timer);
+    if (stopCanvas) stopCanvas();
+    const fillEl = $('.welcome-bar i'); if (fillEl) fillEl.style.width = '100%';
+    const pctE = $('#wcPct'); if (pctE) pctE.textContent = '100%';
+    setStatus(100);
+    w.classList.add('done');
+    setTimeout(() => w.remove(), 1000);
+  };
+
+  // live percentage + bar, then auto-reveal
+  let pct = 0;
+  const fill = $('.welcome-bar i');
+  const pctEl = $('#wcPct');
+  const total = reduce ? 1 : 2600;
+  const tick = 40;
+  const step = 100 / (total / tick);
+  setStatus(0);
+  const timer = setInterval(() => {
+    pct = Math.min(100, pct + step);
+    if (fill) fill.style.width = pct + '%';
+    if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+    setStatus(pct);
+    if (pct >= 100) { clearInterval(timer); setTimeout(dismiss, 450); }
+  }, tick);
+
+  w.addEventListener('click', dismiss);
+}
+
+/* constellation animation for the intro; returns a stop() */
+function startWelcomeCanvas() {
+  const canvas = $('#wcCanvas');
+  if (!canvas) return null;
+  const ctx = canvas.getContext('2d');
+  let w, hgt, nodes, raf;
+  const COUNT = 52, LINK = 150;
+  function resize() { w = canvas.width = window.innerWidth; hgt = canvas.height = window.innerHeight; }
+  function build() {
+    nodes = Array.from({ length: COUNT }, () => ({
+      x: Math.random() * w, y: Math.random() * hgt,
+      vx: (Math.random() - 0.5) * 0.5, vy: (Math.random() - 0.5) * 0.5
+    }));
+  }
+  function step() {
+    ctx.clearRect(0, 0, w, hgt);
+    for (const n of nodes) {
+      n.x += n.vx; n.y += n.vy;
+      if (n.x < 0 || n.x > w) n.vx *= -1;
+      if (n.y < 0 || n.y > hgt) n.vy *= -1;
+    }
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i], b = nodes[j];
+        const dist = Math.hypot(a.x - b.x, a.y - b.y);
+        if (dist < LINK) {
+          ctx.strokeStyle = `rgba(61,164,240,${(1 - dist / LINK) * 0.32})`;
+          ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+        }
+      }
+    }
+    for (const n of nodes) {
+      ctx.fillStyle = 'rgba(116,194,255,0.85)';
+      ctx.beginPath(); ctx.arc(n.x, n.y, 1.7, 0, Math.PI * 2); ctx.fill();
+    }
+    raf = requestAnimationFrame(step);
+  }
+  resize(); build(); step();
+  const onResize = () => { resize(); build(); };
+  window.addEventListener('resize', onResize);
+  return function stop() { cancelAnimationFrame(raf); window.removeEventListener('resize', onResize); };
+}
+initWelcome();
