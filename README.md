@@ -111,3 +111,54 @@ Then do **step 3 (Enable Pages)** above.
   Shared multi-user storage would need a backend, which is outside free static hosting.
 
 [pdf.js]: https://mozilla.github.io/pdf.js/
+
+---
+
+## New in v3 — advanced HR features
+
+All of these run **100% client-side** (no backend, still free on GitHub Pages):
+
+- **Job-Description mode** — in the Scanner, paste a real JD. The score then blends the
+  department profile (50%) with that exact role's extracted keywords (50%), so scoring is
+  role-specific, not just department-specific.
+- **Bulk scanning** — the **Bulk Scan** tab accepts many resumes at once (up to ~30), parses and
+  scores each locally, ranks them, flags likely **duplicates by email**, and adds the batch to the
+  pool in one click.
+- **Smarter parsing** — auto-extracts candidate **name**, **email**, **phone** and **years of
+  experience** from the resume, and flags duplicate applicants by email on save and in bulk.
+- **Blind screening** — a header toggle that hides identity cues (name, email, phone) across the
+  Pool, Bulk results, comparison and scorecard to reduce bias. Scoring itself is already
+  identity-blind; this hides the cues from the reviewer's eyes.
+- **Side-by-side comparison** — tick 2–3 candidates in the Pool and click **Compare** to see
+  scores, experience, education, stage, matched skills and gaps in one modal.
+- **Hiring analytics** — the **Analytics** tab shows KPIs, a hiring **funnel**, **department
+  demand**, **source effectiveness** (avg score per source) and **time-to-hire** (avg days from
+  applied to Selected, tracked as you move candidates through stages).
+- **PDF scorecard** — the Scanner's **PDF Scorecard** button opens a clean printable candidate
+  report; use your browser's "Save as PDF" to export and share with hiring managers.
+
+## Integrations
+
+- **Google Sheets / Excel / HRMS** — the CSV export (Pool and Analytics) imports directly into
+  Sheets, Excel and most HRMS/SAP upload templates.
+- **Job-post generator** — in Analytics, "Generate Job Post" builds ready-to-paste hiring text
+  (for the most in-demand department) and opens LinkedIn so you can paste it.
+- Direct API posting to Naukri/LinkedIn requires their developer accounts plus a backend, so the
+  app provides the paste-ready text rather than auto-posting.
+
+## Shared storage (optional, needs your backend)
+
+By default each browser keeps its own data (`localStorage`). To let the whole HR team share one
+candidate pool, an optional Supabase scaffold is included at `js/cloud.js`:
+
+1. Create a free project at <https://supabase.com> and a `candidates` table.
+2. Enable Row Level Security and add policies for your team/auth.
+3. Put your project URL and anon key in `js/cloud.js`.
+4. Add these scripts to `index.html` **before** `js/app.js`:
+   ```html
+   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+   <script src="js/cloud.js"></script>
+   ```
+5. Wire `Cloud.load()` / `Cloud.upsert()` / `Cloud.remove()` into the app's save/load points.
+
+This is intentionally left disabled so the static build keeps working offline with zero setup.
