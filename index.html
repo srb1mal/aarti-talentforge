@@ -9,9 +9,32 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Pacifico&family=Oswald:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/styles.css" />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect x='8' y='20' width='84' height='60' rx='6' fill='none' stroke='%233da4f0' stroke-width='6'/><text x='50' y='58' font-size='34' text-anchor='middle' fill='%233da4f0' font-family='Brush Script MT, cursive' font-style='italic' font-weight='bold'>Aarti</text><rect x='22' y='64' width='56' height='9' rx='2' fill='%233da4f0'/></svg>" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect x='8' y='18' width='84' height='64' fill='none' stroke='%233da4f0' stroke-width='6'/><text x='50' y='54' font-size='32' text-anchor='middle' fill='%233da4f0' font-family='Brush Script MT, cursive' font-style='italic' font-weight='bold'>Aarti</text><rect x='22' y='60' width='56' height='15' fill='%233da4f0'/></svg>" />
 </head>
 <body>
+  <!-- ===================== WELCOME SPLASH ===================== -->
+  <div id="welcome" class="welcome">
+    <div class="wc-curtain wc-left"></div>
+    <div class="wc-curtain wc-right"></div>
+    <div class="wc-seam"></div>
+    <div class="wc-grid"></div>
+    <div class="wc-glow"></div>
+    <canvas class="wc-canvas" id="wcCanvas"></canvas>
+    <div class="wc-sparks" id="wcSparks"></div>
+    <div class="welcome-inner">
+      <div class="wc-logo-wrap">
+        <span class="wc-ring"></span>
+        <span class="brand-logo welcome-logo"><span class="brand-logo-text">Aarti</span><span class="brand-logo-bar"></span></span>
+      </div>
+      <h2 class="welcome-title">Welcome to <span>TalentForge</span></h2>
+      <p class="welcome-sub">AI Resume Intelligence · Aarti Steels Ltd</p>
+      <p class="welcome-greet" id="welcomeGreet">Good day — let's find the right talent.</p>
+      <div class="welcome-bar"><i></i></div>
+      <div class="wc-meta"><span class="wc-status" id="wcStatus">Initialising engine…</span><span class="wc-pct" id="wcPct">0%</span></div>
+      <small class="welcome-skip">Click anywhere to enter</small>
+    </div>
+  </div>
+
   <!-- ===================== HEADER ===================== -->
   <header class="site-header" id="top">
     <div class="container header-inner">
@@ -27,10 +50,15 @@
       </a>
       <nav class="main-nav" id="mainNav">
         <a href="#home" class="nav-link active" data-tab="home">Home</a>
-        <a href="#scanner" class="nav-link" data-tab="scanner">Resume Scanner</a>
+        <a href="#scanner" class="nav-link" data-tab="scanner">Scanner</a>
+        <a href="#bulk" class="nav-link" data-tab="bulk">Bulk Scan</a>
         <a href="#pool" class="nav-link" data-tab="pool">Candidate Pool</a>
+        <a href="#analytics" class="nav-link" data-tab="analytics">Analytics</a>
         <a href="#about" class="nav-link" data-tab="about">About</a>
-        <span class="status-dot"><i></i>AI Engine Online</span>
+        <label class="blind-toggle" title="Hide identity details (name, email, gender cues) to reduce bias">
+          <input type="checkbox" id="blindToggle" /><span class="bt-track"></span><em>Blind</em>
+        </label>
+        <span class="status-dot"><i></i>AI Online</span>
       </nav>
       <button class="nav-toggle" id="navToggle" aria-label="Toggle menu">☰</button>
     </div>
@@ -118,6 +146,10 @@
             <select id="deptSelect"></select>
           </label>
           <p class="dept-hint" id="deptHint"></p>
+          <details class="jd-box" id="jdBox">
+            <summary>Score against a specific Job Description (optional)</summary>
+            <textarea id="jdText" rows="4" placeholder="Paste the job description here. When provided, the score blends the department profile with this exact role's requirements."></textarea>
+          </details>
           <div class="field-row">
             <label class="field">
               <span>Candidate Email</span>
@@ -220,6 +252,7 @@
 
             <div class="result-actions">
               <button class="btn btn-primary" id="saveBtn">Save to Candidate Pool</button>
+              <button class="btn btn-ghost" id="scorecardBtn">PDF Scorecard</button>
               <button class="btn btn-ghost" id="rescanBtn">Scan Another</button>
             </div>
           </div>
@@ -256,6 +289,7 @@
           <input type="text" id="searchBox" placeholder="Search name / skill..." />
         </div>
         <div class="pool-actions">
+          <button class="btn btn-sm btn-primary" id="compareBtn" disabled>Compare (0)</button>
           <button class="btn btn-sm btn-ghost" id="exportBtn">Export CSV</button>
           <button class="btn btn-sm btn-danger" id="clearBtn">Clear All</button>
         </div>
@@ -265,6 +299,7 @@
         <table class="pool-table">
           <thead>
             <tr>
+              <th><input type="checkbox" id="selectAll" title="Select all for comparison" /></th>
               <th>Rank</th>
               <th>Candidate</th>
               <th>Department</th>
@@ -278,6 +313,92 @@
         </table>
         <div class="pool-empty" id="poolEmpty">
           <p>No candidates yet. Head to the <a href="#scanner" data-goto="scanner">Resume Scanner</a> to add your first one.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== BULK SCAN ===================== -->
+  <section class="tab-panel" id="bulk">
+    <div class="container section">
+      <h2 class="section-title">Bulk Resume Scan</h2>
+      <p class="section-lead">Drop many resumes at once. Each is parsed, scored and ranked automatically — then add the lot to your candidate pool in one click.</p>
+
+      <div class="bulk-controls">
+        <label class="field">
+          <span>Department for this batch</span>
+          <select id="bulkDept"></select>
+        </label>
+        <label class="field">
+          <span>Min. Experience (years)</span>
+          <input type="number" id="bulkMinExp" value="2" min="0" max="40" />
+        </label>
+        <label class="field">
+          <span>Application Source</span>
+          <select id="bulkSource">
+            <option value="Referral">Referral</option>
+            <option value="LinkedIn">LinkedIn</option>
+            <option value="Naukri">Naukri</option>
+            <option value="Company Website">Company Website</option>
+            <option value="Walk-in">Walk-in</option>
+            <option value="Campus">Campus</option>
+            <option value="Other">Other</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="dropzone bulk-dropzone" id="bulkDropzone">
+        <input type="file" id="bulkFileInput" accept=".pdf,.txt" multiple hidden />
+        <div class="dropzone-inner">
+          <div class="dz-icon">📂</div>
+          <p><strong>Click to upload</strong> or drag &amp; drop multiple resumes</p>
+          <small>PDF or TXT · up to ~30 files · processed locally in your browser</small>
+        </div>
+      </div>
+      <div class="file-status" id="bulkStatus"></div>
+
+      <div class="bulk-result-wrap" id="bulkResultWrap" hidden>
+        <div class="bulk-result-head">
+          <h3 id="bulkResultTitle">Ranked Results</h3>
+          <div>
+            <button class="btn btn-sm btn-primary" id="bulkAddAll">Add All to Pool</button>
+            <button class="btn btn-sm btn-ghost" id="bulkClear">Clear</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="pool-table">
+            <thead>
+              <tr><th>Rank</th><th>Candidate</th><th>Score</th><th>Exp.</th><th>Top Skills</th><th>Status</th></tr>
+            </thead>
+            <tbody id="bulkBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== ANALYTICS ===================== -->
+  <section class="tab-panel" id="analytics">
+    <div class="container section">
+      <h2 class="section-title">Hiring Analytics</h2>
+      <p class="section-lead">A live read on your pipeline — demand by department, source effectiveness, funnel drop-off and time-to-hire.</p>
+      <div id="analyticsEmpty" class="pool-empty">
+        <p>No data yet. Scan and save some candidates first, then come back to see the analytics.</p>
+      </div>
+      <div id="analyticsBody" hidden>
+        <div class="an-kpis" id="anKpis"></div>
+        <div class="an-grid">
+          <div class="an-card"><h4>Hiring Funnel</h4><div id="anFunnel"></div></div>
+          <div class="an-card"><h4>Department Demand</h4><div id="anDept"></div></div>
+          <div class="an-card"><h4>Source Effectiveness</h4><div id="anSource"></div></div>
+          <div class="an-card">
+            <h4>Integrations &amp; Export</h4>
+            <div class="integration-box">
+              <button class="btn btn-sm btn-ghost" id="anExportSheets">Export for Google Sheets</button>
+              <button class="btn btn-sm btn-ghost" id="anJobPost">Generate Job Post</button>
+              <p class="int-note">CSV imports directly into Google Sheets / Excel / most HRMS. The job-post generator creates ready-to-paste text for Naukri &amp; LinkedIn. Direct API posting and shared cloud storage require a backend (see README).</p>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -404,6 +525,109 @@
       <small>Internal AI demonstration tool · Data stays in your browser</small>
     </div>
   </footer>
+
+  <!-- ===================== COMPARISON MODAL ===================== -->
+  <div class="modal" id="compareModal" hidden>
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3>Candidate Comparison</h3>
+        <button class="modal-close" data-close-modal aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body" id="compareBody"></div>
+    </div>
+  </div>
+
+  <!-- ===================== BLIND SCREENING EXPLAINER ===================== -->
+  <div class="modal blind-modal" id="blindModal" hidden>
+    <div class="modal-backdrop" data-blind-close></div>
+    <div class="modal-card blind-card">
+      <div class="blind-eye-wrap">
+        <svg class="blind-eye" viewBox="0 0 24 24" aria-hidden="true">
+          <path class="be-eye" d="M1.5 12S5 5 12 5s10.5 7 10.5 7-3.5 7-10.5 7S1.5 12 1.5 12z" fill="none" stroke="currentColor" stroke-width="1.7"/>
+          <circle class="be-iris" cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.7"/>
+          <line class="be-slash" x1="3" y1="3" x2="21" y2="21" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+        </svg>
+      </div>
+
+      <h3 class="blind-title">Blind Screening <span>Enabled</span></h3>
+      <p class="blind-lead">To reduce unconscious bias, TalentForge now hides who the candidate is — so shortlisting is based purely on merit.</p>
+
+      <div class="blind-demo">
+        <div class="bd-card bd-before">
+          <span class="bd-tag warn">Identity visible</span>
+          <div class="bd-name">Rahul Sharma</div>
+          <div class="bd-line">rahul.sharma@email.com</div>
+          <div class="bd-line">+91 98765 43210</div>
+          <div class="bd-keep">Skills · Experience · Score</div>
+        </div>
+        <div class="bd-arrow">➜</div>
+        <div class="bd-card bd-after">
+          <span class="bd-tag good">🔒 Blind ON</span>
+          <div class="bd-name">Candidate&nbsp;7F3A</div>
+          <span class="redact-bar" style="width:150px"></span>
+          <span class="redact-bar" style="width:120px"></span>
+          <div class="bd-keep ok">Skills · Experience · Score ✓</div>
+        </div>
+      </div>
+
+      <ul class="blind-points">
+        <li data-ic="🙈"><strong>Hidden:</strong> candidate name, email, phone &amp; other identity cues across the Pool, Bulk results, comparison and scorecard.</li>
+        <li data-ic="📊"><strong>Still shown:</strong> skills, experience, education and the AI score — everything you actually evaluate on.</li>
+        <li data-ic="⚖️"><strong>Why it matters:</strong> removing names and contact details helps prevent bias around gender, background or origin, for fairer hiring.</li>
+      </ul>
+
+      <div class="blind-actions">
+        <button class="btn btn-primary" data-blind-keep>Keep It On</button>
+        <button class="btn btn-ghost" data-blind-off>Turn Off</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== BLIND OFF EXPLAINER ===================== -->
+  <div class="modal blind-modal" id="blindModalOff" hidden>
+    <div class="modal-backdrop" data-blindoff-close></div>
+    <div class="modal-card blind-card">
+      <div class="blind-eye-wrap open">
+        <svg class="blind-eye" viewBox="0 0 24 24" aria-hidden="true">
+          <path class="be-eye" d="M1.5 12S5 5 12 5s10.5 7 10.5 7-3.5 7-10.5 7S1.5 12 1.5 12z" fill="none" stroke="currentColor" stroke-width="1.7"/>
+          <circle class="be-iris" cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.7"/>
+        </svg>
+      </div>
+
+      <h3 class="blind-title">Blind Screening <span class="off">Turned Off</span></h3>
+      <p class="blind-lead">Candidate identities are now visible again. You'll see full names and contact details — please keep evaluating on merit.</p>
+
+      <div class="blind-demo">
+        <div class="bd-card bd-after">
+          <span class="bd-tag good">🔒 Was Blind</span>
+          <div class="bd-name">Candidate&nbsp;7F3A</div>
+          <span class="redact-bar" style="width:150px"></span>
+          <span class="redact-bar" style="width:120px"></span>
+          <div class="bd-keep">Skills · Experience · Score</div>
+        </div>
+        <div class="bd-arrow">➜</div>
+        <div class="bd-card bd-before reveal-card">
+          <span class="bd-tag warn">👁 Now visible</span>
+          <div class="bd-name">Rahul Sharma</div>
+          <div class="bd-line">rahul.sharma@email.com</div>
+          <div class="bd-line">+91 98765 43210</div>
+          <div class="bd-keep">Skills · Experience · Score</div>
+        </div>
+      </div>
+
+      <ul class="blind-points">
+        <li data-ic="👁"><strong>Now visible:</strong> candidate name, email and phone are shown again across the Pool, Bulk results, comparison and scorecard.</li>
+        <li data-ic="🤝"><strong>Use responsibly:</strong> base shortlisting on skills, experience and the AI score — not on personal details.</li>
+        <li data-ic="🔄"><strong>Re-enable anytime:</strong> switch Blind back on whenever you want a fully bias-free review.</li>
+      </ul>
+
+      <div class="blind-actions">
+        <button class="btn btn-primary" data-blindoff-close>Got It</button>
+        <button class="btn btn-ghost" data-blind-reon>Re-enable Blind</button>
+      </div>
+    </div>
+  </div>
 
   <!-- pdf.js for client-side PDF text extraction -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
